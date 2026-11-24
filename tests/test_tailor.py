@@ -4,7 +4,7 @@ from pathlib import Path
 
 from cvtailor.parse import header_key, parse_cv
 from cvtailor.store import Store
-from cvtailor.tailor import tailor
+from cvtailor.tailor import coverage, extract_terms, tailor
 
 MASTER = """
 CHAN EXAMPLE
@@ -60,16 +60,42 @@ class TailorTests(unittest.TestCase):
         cv = parse_cv(MASTER)
         risk, _ = tailor(cv, "Risk Analyst", RISK_JOB)
         brand, _ = tailor(cv, "Marketing Analytics Intern", BRAND_JOB)
-        self.assertIn("Risk Analyst", risk["profile"])
-        self.assertIn("VaR", risk["profile"])
-        self.assertIn("Tableau", brand["profile"])
         risk_headings = [entry["heading"] for section in risk["sections"] for entry in section["entries"]]
         brand_headings = [entry["heading"] for section in brand["sections"] for entry in section["entries"]]
         self.assertIn("RiskFit", risk_headings)
-        self.assertNotIn("Wisers Information Limited", risk_headings)
+        self.assertNotIn("AI Trader", risk_headings)
         self.assertIn("Wisers Information Limited", brand_headings)
-        self.assertNotIn("RiskFit", brand_headings)
-        self.assertNotIn("invented employer", risk["profile"].lower())
+        risk_projects = next(s for s in risk["sections"] if s["key"] == "projects")
+        self.assertEqual(risk_projects["entries"][0]["heading"], "RiskFit")
+
+    def test_work_history_is_never_dropped_or_reordered(self):
+        cv = parse_cv(MASTER)
+        risk, _ = tailor(cv, "Risk Analyst", RISK_JOB)
+        experience = next(s for s in risk["sections"] if s["key"] == "experience")
+        self.assertEqual([e["heading"] for e in experience["entries"]], ["Wisers Information Limited"])
+        self.assertTrue(experience["entries"][0]["bullets"])
+
+    def test_own_summary_is_kept(self):
+        cv = parse_cv(MASTER)
+        risk, _ = tailor(cv, "Risk Analyst", RISK_JOB)
+        self.assertEqual(risk["profile"], cv["profile"])
+
+    def test_sentence_end_does_not_break_matching(self):
+        keywords, phrases = extract_terms(RISK_JOB)
+        self.assertIn("python", keywords)
+        self.assertNotIn("python.", keywords)
+        self.assertNotIn("risk python", phrases)
+        self.assertNotIn("someone", keywords)
+
+    def test_coverage_reports_missing_terms_without_adding_them(self):
+        cv = parse_cv(MASTER)
+        report = coverage(cv, BRAND_JOB)
+        self.assertIn("campaign", report["missing"])
+        self.assertIn("tableau dashboards", report["found"])
+        self.assertTrue(0 < report["percent"] < 100)
+        tailored, notes = tailor(cv, "Marketing Analytics Intern", BRAND_JOB)
+        self.assertNotIn("campaign", to_text(tailored).lower())
+        self.assertTrue(any("campaign" in note for note in notes))
 
     def test_does_not_add_a_skill_that_was_not_on_the_cv(self):
         cv = parse_cv(MASTER)
@@ -78,6 +104,15 @@ class TailorTests(unittest.TestCase):
             line for section in tailored["sections"] for line in section.get("lines", [])
         )
         self.assertNotIn("Kubernetes", blob)
+
+
+def to_text(cv: dict) -> str:
+    chunks = [cv["profile"]]
+    for section in cv["sections"]:
+        chunks.extend(section.get("lines", []))
+        for entry in section.get("entries", []):
+            chunks.extend([entry["heading"], entry.get("sub", ""), *entry.get("bullets", [])])
+    return "\n".join(chunks)
 
 
 class StoreTests(unittest.TestCase):
@@ -97,8 +132,10 @@ class StoreTests(unittest.TestCase):
             self.assertEqual({job["title"] for job in jobs}, {"Risk Analyst", "Marketing Analytics Intern"})
             risk = reopened.get_job(risk_id)
             brand = reopened.get_job(brand_id)
-            self.assertIn("VaR", risk["cv"]["profile"])
-            self.assertIn("Tableau", brand["cv"]["profile"])
+            self.assertEqual(risk["cv"]["sections"][2]["entries"][0]["heading"], "RiskFit")
+            self.assertTrue(brand["cv"]["sections"][-1]["lines"][0].startswith("Tableau"))
+            self.assertEqual(risk["match"]["missing"], ["analyst"])
+            self.assertTrue(all(job["match"] for job in jobs))
             filename, pdf = reopened.get_version_file(risk["version_id"], "pdf")
             self.assertTrue(filename.endswith(".pdf"))
             self.assertTrue(pdf.startswith(b"%PDF"))

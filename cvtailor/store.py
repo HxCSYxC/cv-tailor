@@ -10,7 +10,7 @@ from pathlib import Path
 
 from cvtailor.parse import parse_cv, text_from_upload
 from cvtailor.render import to_html, to_markdown, to_pdf
-from cvtailor.tailor import infer_title, tailor
+from cvtailor.tailor import coverage, infer_title, tailor
 
 
 def now() -> str:
@@ -146,7 +146,7 @@ class Store:
         with self._connect() as con:
             rows = con.execute(
                 """
-                SELECT j.id, j.title, j.created_at, v.id AS version_id, v.created_at AS version_at
+                SELECT j.id, j.title, j.description, j.created_at, v.id AS version_id, v.created_at AS version_at
                 FROM jobs j
                 JOIN versions v ON v.id = (
                     SELECT id FROM versions WHERE job_id = j.id ORDER BY id DESC LIMIT 1
@@ -154,7 +154,14 @@ class Store:
                 ORDER BY j.id DESC
                 """
             ).fetchall()
-        return [dict(row) for row in rows]
+        master = self.get_master()
+        jobs = []
+        for row in rows:
+            job = dict(row)
+            description = job.pop("description")
+            job["match"] = coverage(master["parsed"], description)["percent"] if master else None
+            jobs.append(job)
+        return jobs
 
     def get_job(self, job_id: int) -> dict | None:
         with self._connect() as con:
@@ -179,6 +186,7 @@ class Store:
             "notes": json.loads(version["notes"]),
             "version_at": version["created_at"],
             "stale": stale,
+            "match": coverage(master["parsed"], job["description"]) if master else None,
         }
 
     def get_version_file(self, version_id: int, kind: str) -> tuple[str, bytes]:

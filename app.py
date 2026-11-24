@@ -161,7 +161,7 @@ def _home() -> str:
     for job in jobs:
         cards.append(
             "<article class='card'>"
-            f"<h3><a href='/job/{job['id']}'>{html.escape(job['title'])}</a></h3>"
+            f"<h3><a href='/job/{job['id']}'>{html.escape(job['title'])}</a>{_badge(job['match'])}</h3>"
             f"<p class='muted'>Saved {html.escape(job['version_at'])}</p>"
             f"<p><a href='/version/{job['version_id']}.pdf'>PDF</a> · "
             f"<a href='/version/{job['version_id']}.html'>HTML</a> · "
@@ -200,8 +200,34 @@ def _home() -> str:
     return _page("CV Tailor", body)
 
 
+def _badge(percent: int | None) -> str:
+    if percent is None:
+        return ""
+    tone = "good" if percent >= 70 else "ok" if percent >= 45 else "low"
+    return f" <span class='badge {tone}' title='Share of the job description key terms already on your master CV'>{percent}% match</span>"
+
+
+def _match_block(match: dict | None) -> str:
+    if not match:
+        return ""
+    found = "".join(f"<li>{html.escape(term)}</li>" for term in match["found"]) or "<li class='muted'>None yet</li>"
+    missing = "".join(f"<li>{html.escape(term)}</li>" for term in match["missing"]) or "<li class='muted'>Nothing missing</li>"
+    return f"""
+    <h3>How well your master CV covers this job{_badge(match['percent'])}</h3>
+    <div class='grid'>
+      <section><h4>Already on your CV</h4><ul class='terms'>{found}</ul></section>
+      <section><h4>Not on your CV</h4><ul class='terms missing'>{missing}</ul>
+        <p class='muted'>The app never adds these. If one is true for you, add it to your master CV, save it, then regenerate.</p></section>
+    </div>
+    """
+
+
 def _job_page(job: dict) -> str:
-    notes = "".join(f"<li>{html.escape(note)}</li>" for note in job["notes"])
+    shown = [
+        note for note in job["notes"]
+        if not (job.get("match") and note.startswith(("Terms from the job already", "Not found on your CV")))
+    ]
+    notes = "".join(f"<li>{html.escape(note)}</li>" for note in shown) or "<li class='muted'>Nothing reordered or trimmed.</li>"
     stale = ""
     if job["stale"]:
         stale = "<p class='warn'>The master CV changed after this version. Regenerate to apply it.</p>"
@@ -214,12 +240,13 @@ def _job_page(job: dict) -> str:
       <a href='/version/{job['version_id']}.html'>Download HTML</a> ·
       <a href='/version/{job['version_id']}.md'>Download Markdown</a>
     </p>
+    {_match_block(job.get('match'))}
     <h3>What changed</h3>
     <ul>{notes}</ul>
     <form action='/job/{job['id']}/regenerate' method='post' class='inline'>
       <button type='submit'>Regenerate from the current master CV</button>
     </form>
-    <form action='/job/{job['id']}/delete' method='post' class='inline'>
+    <form action='/job/{job['id']}/delete' method='post' class='inline' onsubmit="return confirm('Delete this job CV and all its versions?')">
       <button type='submit' class='quiet'>Delete this job CV</button>
     </form>
     <h3>CV</h3>
@@ -251,6 +278,14 @@ def _page(title: str, body: str) -> str:
   button:disabled {{ opacity: .45; cursor: not-allowed; }}
   .muted {{ color: #5c6b7e; font-size: 14px; }}
   .warn {{ background: #fff6e8; border-left: 3px solid #a15c00; padding: 8px 10px; }}
+  .badge {{ font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 8px; margin-left: 8px; vertical-align: middle; }}
+  .badge.good {{ background: #e3f3e8; color: #1d5e33; }}
+  .badge.ok {{ background: #fff3dc; color: #7a4a00; }}
+  .badge.low {{ background: #fbe5e5; color: #8a2b2b; }}
+  h4 {{ margin: 0 0 6px; font-size: 14px; }}
+  ul.terms {{ list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }}
+  ul.terms li {{ background: #eef3fa; border-radius: 6px; padding: 2px 8px; font-size: 14px; }}
+  ul.terms.missing li {{ background: #f7eeee; }}
   .sheet {{ width: 100%; height: 720px; border: 1px solid #e2e6ee; background: white; }}
   pre {{ white-space: pre-wrap; background: white; border: 1px solid #e2e6ee; padding: 12px; }}
   form.inline {{ display: inline-block; margin-right: 8px; }}
@@ -258,7 +293,7 @@ def _page(title: str, body: str) -> str:
 </style></head>
 <body><main>
   <h1>CV Tailor</h1>
-  <p class="lede">One master CV stays saved on this computer. Each job description produces its own CV. The app reorders and keeps the lines that match the job. It does not invent experience.</p>
+  <p class="lede">One master CV stays saved on this computer. Each job description produces its own CV. The app keeps every job you have held, puts the bullets that match the job first, and shows which of the job's terms your CV does not cover yet. It does not invent experience.</p>
   {body}
 </main></body></html>"""
 
