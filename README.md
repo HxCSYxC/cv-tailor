@@ -14,7 +14,7 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
-Open [http://127.0.0.1:7860](http://127.0.0.1:7860).
+Open [http://127.0.0.1:7860](http://127.0.0.1:7860). If that port is busy, the app moves to the next free one and prints the address it used. You can also choose a port: `PORT=8000 python3 app.py`.
 
 1. Upload your CV once (PDF, Word, HTML, or text). It is stored in `data/cv.db`.
 2. Upload or paste a job description. A CV for that job is created immediately.

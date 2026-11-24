@@ -10,6 +10,7 @@ Then open http://127.0.0.1:7860
 from __future__ import annotations
 
 import html
+import os
 import re
 from email import policy
 from email.parser import BytesParser
@@ -23,7 +24,7 @@ from cvtailor.store import Store
 ROOT = Path(__file__).resolve().parent
 STORE = Store(ROOT / "data" / "cv.db")
 HOST = "127.0.0.1"
-PORT = 7860
+PORT = int(os.environ.get("PORT", "7860"))
 MAX_BODY = 6_000_000
 
 
@@ -299,8 +300,16 @@ def _page(title: str, body: str) -> str:
 
 
 def main() -> None:
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"CV Tailor is running at http://{HOST}:{PORT}", flush=True)
+    server = None
+    for port in range(PORT, PORT + 20):
+        try:
+            server = ThreadingHTTPServer((HOST, port), Handler)
+            break
+        except OSError:
+            print(f"Port {port} is already in use, trying {port + 1}.", flush=True)
+    if server is None:
+        raise SystemExit(f"No free port between {PORT} and {PORT + 19}. Set another with PORT=8000 python3 app.py")
+    print(f"CV Tailor is running at http://{HOST}:{server.server_address[1]}", flush=True)
     print("The master CV and every job CV are stored in data/cv.db on this computer.", flush=True)
     try:
         server.serve_forever()
