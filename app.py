@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from cvtailor import rewrite
 from cvtailor.parse import text_from_upload
 from cvtailor.store import Store
 
@@ -171,6 +172,14 @@ def _home() -> str:
         )
     job_list = "".join(cards) or "<p class='muted'>No job CV yet. Upload a job description and one is written immediately.</p>"
     disabled = "" if master else "disabled"
+    if rewrite.available():
+        mode = f"<p class='muted'>Claude ({html.escape(rewrite.MODEL)}) rewords your summary and bullets for each job. Nothing is added or removed.</p>"
+    else:
+        mode = (
+            "<p class='warn'>No Anthropic API key is set, so job CVs keep your exact wording. "
+            "To have Claude reword them, stop the app and start it with "
+            "<code>ANTHROPIC_API_KEY=your-key python3 app.py</code>.</p>"
+        )
     body = f"""
     <div class='grid'>
       <section>
@@ -184,6 +193,7 @@ def _home() -> str:
       </section>
       <section>
         <h2>New job</h2>
+        {mode}
         <form action='/jobs' method='post' enctype='multipart/form-data'>
           <label>Role title <span class='muted'>(optional, otherwise taken from the description)</span></label>
           <input type='text' name='title' placeholder='Risk analyst, summer 2027'>
@@ -206,6 +216,25 @@ def _badge(percent: int | None) -> str:
         return ""
     tone = "good" if percent >= 70 else "ok" if percent >= 45 else "low"
     return f" <span class='badge {tone}' title='Share of the job description key terms already on your master CV'>{percent}% match</span>"
+
+
+def _changes_block(job: dict) -> str:
+    changes = job["cv"].get("changes") or []
+    if not changes:
+        return ""
+    rows = "".join(
+        "<tr>"
+        f"<td class='where'>{html.escape(change['where'])}</td>"
+        f"<td class='before'>{html.escape(change['before'])}</td>"
+        f"<td class='after'>{html.escape(change['after'])}</td>"
+        "</tr>"
+        for change in changes
+    )
+    return f"""
+    <h3>Reworded lines</h3>
+    <p class='muted'>Everything else on the CV is exactly as on your master CV.</p>
+    <div class='scroll'><table class='diff'><thead><tr><th>Where</th><th>Your master CV</th><th>For this job</th></tr></thead><tbody>{rows}</tbody></table></div>
+    """
 
 
 def _match_block(match: dict | None) -> str:
@@ -241,8 +270,9 @@ def _job_page(job: dict) -> str:
       <a href='/version/{job['version_id']}.html'>Download HTML</a> ·
       <a href='/version/{job['version_id']}.md'>Download Markdown</a>
     </p>
+    {_changes_block(job)}
     {_match_block(job.get('match'))}
-    <h3>What changed</h3>
+    <h3>Notes</h3>
     <ul>{notes}</ul>
     <form action='/job/{job['id']}/regenerate' method='post' class='inline'>
       <button type='submit'>Regenerate from the current master CV</button>
@@ -287,6 +317,12 @@ def _page(title: str, body: str) -> str:
   ul.terms {{ list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }}
   ul.terms li {{ background: #eef3fa; border-radius: 6px; padding: 2px 8px; font-size: 14px; }}
   ul.terms.missing li {{ background: #f7eeee; }}
+  table.diff {{ width: 100%; border-collapse: collapse; background: white; font-size: 14px; }}
+  table.diff th, table.diff td {{ border: 1px solid #e2e6ee; padding: 6px 8px; vertical-align: top; text-align: left; }}
+  table.diff td.where {{ color: #5c6b7e; width: 18%; }}
+  table.diff td.before {{ color: #6b3a3a; background: #fbf5f5; }}
+  table.diff td.after {{ color: #1d5e33; background: #f3faf5; }}
+  .scroll {{ overflow-x: auto; }}
   .sheet {{ width: 100%; height: 720px; border: 1px solid #e2e6ee; background: white; }}
   pre {{ white-space: pre-wrap; background: white; border: 1px solid #e2e6ee; padding: 12px; }}
   form.inline {{ display: inline-block; margin-right: 8px; }}
@@ -294,7 +330,7 @@ def _page(title: str, body: str) -> str:
 </style></head>
 <body><main>
   <h1>CV Tailor</h1>
-  <p class="lede">One master CV stays saved on this computer. Each job description produces its own CV. The app keeps every job you have held, puts the bullets that match the job first, and shows which of the job's terms your CV does not cover yet. It does not invent experience.</p>
+  <p class="lede">One master CV stays saved on this computer. Each job description produces its own CV. The job CV keeps every section, job and bullet from your master CV; only the wording is adjusted to the job. It never adds experience you did not list, and it shows which of the job's terms your CV does not cover yet.</p>
   {body}
 </main></body></html>"""
 

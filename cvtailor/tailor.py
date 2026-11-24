@@ -1,11 +1,12 @@
-"""Build a job-specific CV by selecting and reordering the master CV.
+"""Build a job-specific CV from the master CV, and report how well it covers the job.
 
-Nothing is added. A bullet, skill, or school that was not on the master CV
-cannot appear on the tailored one.
+The CV keeps every section, job and bullet. Only wording changes (see rewrite.py),
+and nothing that was not on the master CV is added.
 """
 
 from __future__ import annotations
 
+import copy
 import re
 
 STOPWORDS = {
@@ -31,59 +32,47 @@ STOPWORDS = {
 TOKEN = re.compile(r"[a-z0-9][a-z0-9+#.-]*[a-z0-9+#]|[a-z0-9]{2,}")
 
 
-def tailor(cv: dict, job_title: str, job_text: str) -> tuple[dict, list[str]]:
+def tailor(cv: dict, job_title: str, job_text: str, client=None, use_ai: bool | None = None) -> tuple[dict, list[str]]:
+    """Return the master CV with the same sections, entries and bullets, reworded for one job.
+
+    Nothing is removed or reordered. With an Anthropic key, Claude rewords the summary and
+    bullets; without one the CV is returned unchanged with a report of the job's terms.
+    """
+    from cvtailor import rewrite
+
     title = (job_title or "this role").strip()
-    keywords, phrases = extract_terms(job_text)
     notes: list[str] = []
-    education: list[dict] = []
-    experience: list[dict] = []
-    skill_sections: list[dict] = []
-    scored_sections: list[tuple[int, dict]] = []
-    fallback_sections: list[dict] = []
-
-    for section in cv.get("sections", []):
-        if section["key"] == "education":
-            education.append(section)
-            continue
-        if section["key"] == "skills":
-            rewritten, moved = _reorder_skills(section, keywords, phrases)
-            skill_sections.append(rewritten)
-            if moved:
-                notes.append("Moved skills that appear in the job description to the front of each skills line.")
-            continue
-        if section["key"] == "experience":
-            # Employment history is never dropped or reordered: a missing job reads as a gap.
-            rewritten, detail = _trim_experience(section, keywords, phrases)
-            experience.append(rewritten)
-            notes.extend(detail)
-            continue
-        rewritten, section_score, detail = _trim_entries(section, keywords, phrases)
-        if section_score > 0 and (rewritten["entries"] or rewritten["lines"]):
-            scored_sections.append((section_score, rewritten))
-            notes.extend(detail)
-        elif rewritten["entries"] or rewritten["lines"]:
-            fallback_sections.append(rewritten)
-
-    scored_sections.sort(key=lambda item: item[0], reverse=True)
-    others = [section for _, section in scored_sections] or fallback_sections
-    sections = education + experience + others + skill_sections
-
+    if use_ai is None:
+        use_ai = client is not None or rewrite.available()
+    if use_ai:
+        body, changes, extra = rewrite.rewrite(cv, title, job_text, client=client)
+        notes.extend(extra)
+        if changes:
+            notes.insert(0, f"Claude reworded {len(changes)} line(s) for {title}. Sections, jobs and bullets are the same as your master CV.")
+        elif not extra:
+            notes.insert(0, "Claude found no lines that needed rewording for this job.")
+    else:
+        body, changes = copy.deepcopy(cv), []
+        notes.append(
+            "Your wording was not changed: no Anthropic API key is set. "
+            "Start the app with ANTHROPIC_API_KEY set to have Claude reword your CV for each job."
+        )
     tailored = {
-        "name": cv.get("name", ""),
-        "contact": cv.get("contact", ""),
+        "name": body.get("name", ""),
+        "contact": body.get("contact", ""),
         "target": title,
-        "profile": cv.get("profile", ""),
-        "sections": sections,
+        "profile": body.get("profile", ""),
+        "sections": body.get("sections", []),
+        "changes": changes,
     }
     report = coverage(cv, job_text)
     if report["found"]:
-        notes.insert(0, "Terms from the job already on your CV: " + ", ".join(report["found"]) + ".")
+        notes.append("Terms from the job already on your CV: " + ", ".join(report["found"]) + ".")
     if report["missing"]:
-        notes.insert(
-            1 if report["found"] else 0,
+        notes.append(
             "Not found on your CV (add them to the master CV only if they are true): "
             + ", ".join(report["missing"])
-            + ".",
+            + "."
         )
     return tailored, notes
 
@@ -166,19 +155,6 @@ def _has_word(word: str, cv_tokens: set[str]) -> bool:
     return word in cv_tokens or any(word in token.split("-") for token in cv_tokens)
 
 
-def score_text(text: str, keywords: list[str], phrases: list[str]) -> int:
-    lowered = normalize(text)
-    padded = f" {lowered} "
-    total = 0
-    for phrase in phrases:
-        if f" {phrase} " in padded:
-            total += 3
-    for word in keywords:
-        if _has_word(word, set(lowered.split())):
-            total += 1
-    return total
-
-
 def infer_title(filename: str, text: str, given: str) -> str:
     if given and given.strip():
         return given.strip()
@@ -191,105 +167,6 @@ def infer_title(filename: str, text: str, given: str) -> str:
         break
     stem = (filename or "role").rsplit(".", 1)[0]
     return stem.replace("_", " ").replace("-", " ").strip() or "Untitled role"
-
-
-def _rank_bullets(bullets: list[str], keywords: list[str], phrases: list[str]) -> list[tuple[int, str]]:
-    return [(score_text(bullet, keywords, phrases), bullet) for bullet in bullets]
-
-
-def _pick_bullets(bullets: list[str], ranked: list[tuple[int, str]], limit: int) -> list[str]:
-    """Strongest matching bullets first; untouched order when nothing matches."""
-    matching = [bullet for score, bullet in sorted(ranked, key=lambda item: item[0], reverse=True) if score > 0]
-    kept = matching[:limit]
-    for bullet in bullets:
-        if len(kept) >= min(2, len(bullets)):
-            break
-        if bullet not in kept:
-            kept.append(bullet)
-    return kept
-
-
-def _trim_experience(section: dict, keywords: list[str], phrases: list[str]) -> tuple[dict, list[str]]:
-    notes: list[str] = []
-    entries = []
-    for entry in section.get("entries", []):
-        bullets = entry.get("bullets", [])
-        ranked = _rank_bullets(bullets, keywords, phrases)
-        kept = _pick_bullets(bullets, ranked, 4)
-        if len(kept) != len(bullets):
-            notes.append(f"Under {entry['heading']}, kept {len(kept)} of {len(bullets)} bullets closest to this job.")
-        entries.append({**entry, "bullets": kept})
-    return {"key": section["key"], "title": section["title"], "entries": entries, "lines": section.get("lines", [])}, notes
-
-
-def _trim_entries(section: dict, keywords: list[str], phrases: list[str]) -> tuple[dict, int, list[str]]:
-    notes: list[str] = []
-    entries = []
-    for entry in section.get("entries", []):
-        bullets = entry.get("bullets", [])
-        ranked = _rank_bullets(bullets, keywords, phrases)
-        heading_score = score_text(f"{entry.get('heading', '')} {entry.get('sub', '')}", keywords, phrases)
-        relevant = heading_score >= 2 or any(score >= 2 for score, _ in ranked)
-        entry_score = heading_score + sum(score for score, _ in ranked)
-        if relevant:
-            kept = _pick_bullets(bullets, ranked, 3)
-            if bullets and len(kept) != len(bullets):
-                notes.append(f"Under {entry['heading']}, kept {len(kept)} of {len(bullets)} bullets closest to this job.")
-            entries.append({**entry, "bullets": kept, "_score": entry_score})
-        elif bullets:
-            entries.append({**entry, "bullets": bullets[:1], "_score": 0, "_fallback": True})
-
-    real = [entry for entry in entries if not entry.get("_fallback")]
-    if real:
-        dropped = [entry["heading"] for entry in entries if entry.get("_fallback")]
-        if dropped:
-            notes.append(f"Left out {', '.join(dropped)} from {section['title'].title()}: nothing in it matched this job.")
-        entries = real
-    entries.sort(key=lambda entry: entry.get("_score", 0), reverse=True)
-    cleaned = [{key: value for key, value in entry.items() if not key.startswith("_")} for entry in entries]
-    section_score = max((entry.get("_score", 0) for entry in entries), default=0)
-    return (
-        {"key": section["key"], "title": section["title"], "entries": cleaned, "lines": section.get("lines", [])},
-        section_score,
-        notes,
-    )
-
-
-def _reorder_skills(section: dict, keywords: list[str], phrases: list[str]) -> tuple[dict, bool]:
-    moved = False
-    lines = []
-    for line in section.get("lines", []):
-        parts = _split_outside_parens(line)
-        if len(parts) < 2:
-            lines.append(line)
-            continue
-        ranked = sorted(parts, key=lambda part: score_text(part, keywords, phrases), reverse=True)
-        if ranked != parts:
-            moved = True
-        lines.append(", ".join(ranked))
-    return {"key": "skills", "title": section["title"], "entries": [], "lines": lines}, moved
-
-
-def _split_outside_parens(line: str) -> list[str]:
-    parts: list[str] = []
-    buf: list[str] = []
-    depth = 0
-    for char in line:
-        if char == "(":
-            depth += 1
-        elif char == ")" and depth:
-            depth -= 1
-        if char == "," and depth == 0:
-            piece = "".join(buf).strip(" -")
-            if piece:
-                parts.append(piece)
-            buf = []
-            continue
-        buf.append(char)
-    piece = "".join(buf).strip(" -")
-    if piece:
-        parts.append(piece)
-    return parts
 
 
 def _blob(cv: dict) -> str:

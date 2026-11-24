@@ -12,9 +12,6 @@ def to_markdown(cv: dict) -> str:
         lines.append(f"# {cv['name']}")
     if cv.get("contact"):
         lines.append(cv["contact"])
-    if cv.get("target"):
-        lines.append("")
-        lines.append(f"**Target role:** {cv['target']}")
     if cv.get("profile"):
         lines.append("")
         lines.append(cv["profile"])
@@ -53,8 +50,6 @@ def to_html(cv: dict) -> str:
         parts.append(f"<h1>{html.escape(cv['name'])}</h1>")
     if cv.get("contact"):
         parts.append(f"<p class='contact'>{html.escape(cv['contact'])}</p>")
-    if cv.get("target"):
-        parts.append(f"<p class='target'>Target role: {html.escape(cv['target'])}</p>")
     if cv.get("profile"):
         parts.append(f"<p class='profile'>{html.escape(cv['profile'])}</p>")
     for section in cv.get("sections", []):
@@ -91,11 +86,8 @@ def to_pdf(cv: dict) -> bytes:
         story.append(Paragraph(_pdf_text(cv["name"]), name))
     if cv.get("contact"):
         story.append(Paragraph(_pdf_text(cv["contact"]), body))
-    if cv.get("target"):
-        story.append(Spacer(1, 6))
-        story.append(Paragraph(_pdf_text(f"Target role: {cv['target']}"), head))
     if cv.get("profile"):
-        story.append(Spacer(1, 4))
+        story.append(Spacer(1, 6))
         story.append(Paragraph(_pdf_text(cv["profile"]), body))
     for section in cv.get("sections", []):
         story.append(Paragraph(_pdf_text(section["title"].upper()), head))
